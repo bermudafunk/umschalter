@@ -261,30 +261,36 @@ class LED:
     # Blinken
     # Blink
     def blink(self):
-#	# Variable fuer die Benennung festlegen
-#	# Setting up variable for naming thread
-#	name = self.pin
 	# Variable, die sagt, ob geblinkt wird
 	# Variable which tells if there's blinking to do
 	self.blinkind = True
+	# Stopp-Signal fuers blink-Thread definieren
+	# Define stop-signal for blink-Thread
+	self.blinkstop = threading.Event()
 	# Thread erstellen
 	# Create thread
-	b = self.blinkbase(self.pin, self.pin, 0.5)
+	b = self.blinkbase(self.pin, 0.5, self.blinkstop)
+	# Thread als Daemon aufrufen (endet mit Programmende)
+	# Create thread as daemon, so that it ends when the main programm ends
+	b.daemon = True
 	# Thread starten
 	# Start thread
 	b.start()
     # Schnell blinken
     # Blink fast
     def blinkfast(self):
-#        # Variable fuer die Benennung festlegen
-#        # Setting up variable for naming thread
-#        name = self.pin
 	# Variable, die sagt, ob geblinkt wird
 	# Variable which tells if there's blinking to do
 	self.blinkind = True
+	# Stopp-Signal fuers blink-Thread definieren
+	# Define stop-signal for blink-Thread
+	self.blinkstop = threading.Event()
 	# Thread erstellen
 	# Create thread
-	b = self.blinkbase(self.pin, self.pin, 0.25)
+	b = self.blinkbase(self.pin, 0.25, self.blinkstop)
+	# Thread als Daemon aufrufen (endet mit Programmende)
+	# Create thread as daemon, so that it ends when the main programm ends
+	b.daemon = True
 	# Thread starten
 	# Start thread
 	b.start()
@@ -296,35 +302,31 @@ class LED:
 	    self.onind = False
 	    print "LED", self.color, "Studio", self.studio, "Pin", self.pin, "off, on-indicator =", self.onind
 	if self.blinkind == True:
-#	    self.pin.onsignal = False #-> Funktioniert so nicht
 	    self.blinkind = False
+	    self.blinkstop.set()
 	    print "LED", self.color, "Studio", self.studio, "Pin", self.pin, "blink-off, blink-indicator=", self.blinkind
-    # Was ist blinken?
-    # Define, how to blink
-#    def blinkforever(self, delay):
-#	self.delay = delay
-#	while self.blinkind == True:
-#	    GPIO.output(self.pin, GPIO.HIGH)
-#	    time.sleep(self.delay)
-#	    GPIO.output(self.pin, GPIO.LOW)
-#	    time.sleep(self.delay)		
     # Thread fuer's Blinken definieren
     # Define Thread for blinking
     class blinkbase(threading.Thread):
-	def __init__(self, name, pin, delay):
+	def __init__(self, pin, delay, stop_event):
 	    threading.Thread.__init__(self)
-	    self.name = name
 	    self.pin = pin
 	    self.delay = delay
-	    self.onsignal = True
+	    self.stop_event = stop_event
 	def run(self):
-#	    blinkforever(self.delay)
-	    while self.onsignal == True:
+#	    print "pin", self.pin, "delay", self.delay, "sollte jetzt losgehen"
+	    while not self.stop_event.is_set():
+#		print "jetzt wird geblinkt mit pin", self.pin
+#		print self.stop_event
 		GPIO.output(self.pin, GPIO.HIGH)
+#		print self.stop_event
 		time.sleep(self.delay)
+#		print self.stop_event
 		GPIO.output(self.pin, GPIO.LOW)
+#		print self.stop_event
 		time.sleep(self.delay)
-
+#	    print "schluss mit blinken"
+	    GPIO.output(self.pin, GPIO.LOW)
     # Sehen, ob was an den LEDs geaendert werden muss
     # Check, if LEDs have to change
     def ledcheck(self):
