@@ -77,6 +77,7 @@ class Button:
 		    if sofortgive != True:
 			print "F4"
 			sofortgive = True
+			soforttimer()
 			ledchange = True
 		    else:
 			# Sofort-Freigabe zuruecknehmen, wenn nicht von anderem Studio schon angefordert
@@ -85,6 +86,7 @@ class Button:
 			if sofortto == 0:
 			    sofortgive = False
 			    sofort = 0
+			    soforttimerstop()
 			    ledchange = True
 		# Normale Freigaben
 		# Regular release
@@ -120,10 +122,10 @@ class Button:
 	    print "U1"
             # Fuer Kombinationen mit sofort
             # For combinations with immediate
-            # Sofort uebernehmen von Automat
-            # Switch immediately from automation
 	    if sofort != 0:
 		print "U2"
+		# Sofort uebernehmen von Automat
+		# Switch immediately from automation
 		if (onair == 0) and (sofort == self.studio):
 		    print "U3"
 		    sofortto = self.studio
@@ -134,6 +136,7 @@ class Button:
 		if (sofort != self.studio) and (sofortgive == True):
 		    print "U4"
 		    sofortto = self.studio
+		    soforttimerstop()
 		    umschaltsofort()
 		    ledchange = True
 		# Reset bei eigener Sofort-Uebergabe
@@ -142,6 +145,7 @@ class Button:
 		    print "U5"
 		    sofort = 0
 		    sofortgive = False
+		    soforttimerstop()
 		    ledchange = True
 	    # Normale Uebernahmen
 	    # Regular claim
@@ -192,7 +196,9 @@ class Button:
 		elif (sofort == self.studio) and (sofortto == 0): 
 		    print "S5"
 		    sofort = 0
-		    sofortgive = False
+		    if sofortgive == True:
+			sofortgive = False
+			soforttimerstop()
 		    ledchange = True
     # Abfrage des Buttons und ggf. Aenderung des Status
     # check button and change state if neccesary
@@ -219,12 +225,12 @@ class Button:
             else:
                 self.laston = True
 		print 'Noticed: Button studio {} function {} pin {} newly pressed'.format(self.studio, self.function, self.pin)
-		print "**** Old State ****"
+		print "**** Pre-Button Old State ****"
 		print "On air:", onair, "Freigabe:", give, "Uebernahme:", take, "Als naechstes:", next
 		print "Sofort gedrueckt:", sofort, "sofortgive:", sofortgive, "sofortto:", sofortto
 		print "ledchange:", ledchange
                 self.changestate()
-		print "**** New State ****"
+		print "**** Post-Button New State ****"
 		print "On air:", onair, "Freigabe:", give, "Uebernahme:", take, "Als naechstes:", next 
 		print "Sofort gedrueckt:", sofort, "sofortgive:", sofortgive, "sofortto:", sofortto  
                 print "ledchange:", ledchange
@@ -255,8 +261,14 @@ class LED:
     # Anschalten
     # Turn on
     def on(self):
-	GPIO.output(self.pin, GPIO.HIGH)
+	if self.blinkind == True:
+            self.blinkstop.set()
+            self.blinkind = False
+	    # wait, to be sure that thread has ended
+	    # this is not so good because it halts the script; maybe should be timer-thread that calls ledcheck() after 1 second
+	    time.sleep(1)
 	self.onind = True
+	GPIO.output(self.pin, GPIO.HIGH)
 	print "LED", self.color, "Studio", self.studio, "Pin", self.pin, "on, on-indicator =", self.onind
     # Blinken
     # Blink
@@ -287,7 +299,7 @@ class LED:
 	self.blinkstop = threading.Event()
 	# Thread erstellen
 	# Create thread
-	b = self.blinkbase(self.pin, 0.25, self.blinkstop)
+	b = self.blinkbase(self.pin, 0.15, self.blinkstop)
 	# Thread als Daemon aufrufen (endet mit Programmende)
 	# Create thread as daemon, so that it ends when the main programm ends
 	b.daemon = True
@@ -304,6 +316,9 @@ class LED:
 	if self.blinkind == True:
 	    self.blinkind = False
 	    self.blinkstop.set()
+	    # Zur Sicherheit; Blinken koennte ja auch aufhoeren, wenn LED gerade an
+	    # To be sure that its really off and didnt stop blinking while led was on
+            GPIO.output(self.pin, GPIO.LOW)
 	    print "LED", self.color, "Studio", self.studio, "Pin", self.pin, "blink-off, blink-indicator=", self.blinkind
     # Thread fuer's Blinken definieren
     # Define Thread for blinking
@@ -326,7 +341,6 @@ class LED:
 #		print self.stop_event
 		time.sleep(self.delay)
 #	    print "schluss mit blinken"
-	    GPIO.output(self.pin, GPIO.LOW)
     # Sehen, ob was an den LEDs geaendert werden muss
     # Check, if LEDs have to change
     def ledcheck(self):
@@ -352,7 +366,7 @@ class LED:
 #		self.on()
 	    # Schnell blinken, wenn das eigene Studio 'sofort' on Air gehen wird, sollte nur fuer Automation relevant sein
 	    # Blink fast, if own Studio will be on Air 'immediately', should only be relevant for automation
-	    elif (sofortto == self.studio):
+	    elif (sofortgive == True) and (sofortto == self.studio):
 		print self.studio, self.color, "Lg4"
                 print "LED", self.studio, "color", self.color, "blinkfast"
 		self.blinkfast()
@@ -396,6 +410,20 @@ class LED:
 		self.off()
 
 
+# Timer definieren, der ggf. zur vollen Stunde umschaltet
+# Define timer that switches at the full hour if necessary
+def timecheck():
+    if time.strftime('%M%S') == '0000':
+	global now, then
+        # gmtime, damit Zeitumstellung keine Rolle spielt
+        # gmtime, so that dst won't do any harm
+        now = time.strftime('%H%M%S', time.gmtime())
+        if 'then' not in globals():
+            then = '999999'
+        if now != then:
+            umschalt()
+            then = now
+
 
 # Umschalt-Logik definieren
 # Define what's going to happen when it's time to switch
@@ -404,7 +432,7 @@ def umschalt():
     # global variables have to be declared as such
     global onair, give, take, next, sofort, sofortgive, sofortto, ledchange
     print "++++++ Umschalt-Zeit! ++++++"
-    print "**** Old State ****"
+    print "**** Pre-Umschalt Old State ****"
     print "On air:", onair, "Freigabe:", give, "Uebernahme:", take, "Als naechstes:", next
     print "Sofort gedrueckt:", sofort, "sofortgive:", sofortgive, "sofortto:", sofortto
     print "ledchange:", ledchange
@@ -428,7 +456,7 @@ def umschalt():
 	sofort = 0
 	sofortgive = False
 	sofortto = 0
-    print "**** New State ****"
+    print "**** Post-Umschalt New State ****"
     print "On air:", onair, "Freigabe:", give, "Uebernahme:", take, "Als naechstes:", next
     print "Sofort gedrueckt:", sofort, "sofortgive:", sofortgive, "sofortto:", sofortto
     print "ledchange:", ledchange
@@ -443,39 +471,56 @@ def umschalt():
 ### countdown is reset by calling studio
 ### at the end of countdown switches to automation
 #### Method: Changing "normal" variables and calling umschalt()
+#
 
-#def umschaltsofort():
+### Einfacher: Nur umsetzen von den sofort-Variablen in die "normalen" Variablen und Umschalt aufrufen
+### Timer u.ae. wird beim Button-Druck ausgeloest
+
+def umschaltsofort():
     # die globalen Variablen muessen in die Funktion geholt werden
     # global variables have to be declared as such
-#    global onair, give, take, next, sofort, sofortgive, sofortto, ledchange
-#    print "++++++ Waiting for the right buttons to be pushed ++++++"
-#
-#    print "++++++ Sofort-Umschalt-Zeit ++++++"
-#    print "**** Old State ****"
-#    print "On air:", onair, "Freigabe:", give, "Uebernahme:", take, "Als naechstes:", next
-#    print "Sofort gedrueckt:", sofort, "sofortgive:", sofortgive, "sofortto:", sofortto
-#    print "ledchange:", ledchange
-    # Fuer sofort-Aufruf
-    # For call with sofort (immediate)
-#    if sofortgive == True:
-	# Wenn anderes Studio sofort uebernehmen will
-	# If other Studio wants to take immediately
-#	if sofortto != 0: 
-#	    umschaltsignal(sofortto)
-#	    print "Switching", onair, "->", sofortto
-#	    onair = sofortto
-#	else: 
-	    # Hier Counter als gesonderten Thread einfuehren, nach Ablauf umschalten auf Automat
-	    # Need Counter as own Thread; If Counter's finished (and nothing's changed), 
-#	    if onair == 0:
-#	        give = True
-#	    else:
-#	        give = False
-#	take = False
-#	ledchange = True
-#	sofort = 0
-#	sofortto = 0
-#	sofortgive = False
+    global onair, give, take, next, sofort, sofortgive, sofortto, ledchange
+    print "++++++ Waiting for the right buttons to be pushed ++++++"
+    print "++++++ Sofort-Umschalt-Zeit ++++++"
+    print "**** Pre-Sofort Old State ****"
+    print "On air:", onair, "Freigabe:", give, "Uebernahme:", take, "Als naechstes:", next
+    print "Sofort gedrueckt:", sofort, "sofortgive:", sofortgive, "sofortto:", sofortto
+    print "ledchange:", ledchange
+    give = True
+    if sofortto == 0:
+	take = False
+    else:
+	take = True
+    next = sofortto
+    sofort = 0
+    sofortgive = False
+    sofortto = 0
+    print "**** Post-Sofort New State ****"
+    print "On air:", onair, "Freigabe:", give, "Uebernahme:", take, "Als naechstes:", next
+    print "Sofort gedrueckt:", sofort, "sofortgive:", sofortgive, "sofortto:", sofortto
+    print "ledchange:", ledchange
+    umschalt()
+
+
+# Sofort-Umschalt-Timer definieren
+# Define timer for immediate-switch
+#sofortcountdown = threading.Timer(30, umschaltsofort)
+
+# Sofort-Umschalt-Timer starten
+# Start timer for immediate-switch	
+def soforttimer():
+    sofortcountdown = threading.Timer(30, umschaltsofort)
+    global sofortcountdown
+    sofortcountdown.daemon = True
+    sofortcountdown.start()
+
+
+# Abbruch Sofort-Umschalt-Timer
+# Cancelation of timer for immediate-switch
+def soforttimerstop():
+    global sofortcountdown
+    sofortcountdown.cancel()
+
 
 
 # Umschalt-Signal fuer den Audio-Router definieren
@@ -542,17 +587,18 @@ print "Sofort gedrueckt:", sofort, "sofortgive:", sofortgive, "sofortto:", sofor
 print "ledchange:", ledchange
 
 
-print 'Lets listen to the buttons and light some LEDs'
+print 'Lets check the buttons, light some LEDs and switch, if its time'
 while True:
-    if time.strftime('%M%S') == '0000':
+    timecheck()
+#    if time.strftime('%M%S') == '0000':
 	# gmtime, damit Zeitumstellung keine Rolle spielt
 	# gmtime, so that dst won't do any harm
-	time = time.strftime('%H%M%S', time.gmtime())
-	if 'lasttime' not in locals():
-	    lasttime = '000000'
-	if time != lasttime:
-	    umschalt()
-	    lasttime = time
+#	time = time.strftime('%H%M%S', time.gmtime())
+#	if 'lasttime' not in locals():
+#	    lasttime = '000000'
+#	if time != lasttime:
+#	    umschalt()
+#	    lasttime = time
     for B in [B1F, B1U, B1S, B2F, B2U, B2S]: 
 	B.buttoncheck()
 	if ledchange  == True:
