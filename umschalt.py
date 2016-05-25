@@ -6,17 +6,25 @@ import time
 import threading
 import logging
 import signal
+import os
 import os.path
+import socket
 import RPi.GPIO as GPIO
 
-# Logging-Format definieren; Letztes Wort aendern: DEBUG, INFO, WARNING, etc.
-# Define logging-format; Change last word: DEBUG, INFO, WARNING
-logging.basicConfig(filename='/var/log/umschalt.log', format='%(asctime)s : %(levelname)s : %(message)s',
+# Logging-Format definieren; Letztes Wort aendern: DEBUG, INFO
+# Define logging-format; Change last word: DEBUG, INFO
+logging.basicConfig(filename='/var/log/umschalt.log',
+                    format='%(asctime)s : %(levelname)s : %(message)s',
                     level=logging.INFO)
+
 
 # RPi.GPIO Layout vewenden (wie Pin-Nummern)
 # use RPi.GPIO layout (use pin-numbers)
 GPIO.setmode(GPIO.BOARD)
+
+
+addr = os.getenv('NOTIFY_SOCKET')
+logging.info("notify-socket: {}".format(addr))
 
 
 # Variablen setzen
@@ -39,14 +47,14 @@ def setstate():
     logging.info("Setstate: checking if we can get variables from file")
     global onair, give, take, nexton, sofort, sofortgive, sofortto, ledchange
     defvar = False
-    if os.path.isfile("statesave.txt"):
-        statesave = open("statesave.txt", "r")
+    if os.path.isfile("/home/umschalter/statesave.txt"):
+        statesave = open("/home/umschalter/statesave.txt", "r")
         logging.debug("Setstate: statesave-file exists")
         variables = statesave.read()
-        timeend = variables.split(';')[0]
-        timestart = time.strftime('%Y%m%d%H')
-        if timeend == timestart:
-            logging.debug("Setstate: statesave has been saved in the current hour, so we'll take variables from it")
+        timesave = variables.split(';')[0]
+        timeread = time.strftime('%Y%m%d%H')
+        if timesave == timeread:
+            logging.info("Setstate: statesave has been saved in the current hour, so we'll take variables from it")
             onair = variables.split(';')[1]
             give = variables.split(';')[2]
             if give == 'True':
@@ -59,12 +67,20 @@ def setstate():
             else:
                 take = False
             nexton = variables.split(';')[4]
+            sofort = variables.split(';')[5]
+            sofortgive = variables.split(';')[6]
+            if sofortgive == 'True':
+                sofortgive = True
+            else:
+                sofortgive = False
+            sofortto = variables.split(';')[7]
             logging.debug("onair: {}, give: {}, take: {}, next: {}".format(onair, give, take, nexton))
+            logging.debug("sofort: {}, sofortgive: {}, sofortto: {}".format(sofort, sofortgive, sofortto))
         else:
-            logging.debug("Setstate: statesave is older then an hour, won't use it. using default-variables.")
+            logging.info("Setstate: statesave is older then an hour, won't use it. using default-variables.")
             defvar = True
     else:
-        logging.debug("Setstate: no statesave-file present. using default-variables")
+        logging.info("Setstate: no statesave-file present. using default-variables")
         defvar = True
 
     if defvar == True:
@@ -78,13 +94,13 @@ def setstate():
         # dowhat = '0'
         # Was wird als naechstes auf Sendung sein? What will be on air next? 1 = Studio 1; 2 = Studio 2; 3 = Aussenstudio/ other Studio; 0 = Automation
         nexton = '0'
+        # Welches Studio hat "Sofort"-Button gedrueckt? Which studio hast pressed the "immediate"-button? 0 = keins/none; 1 = Studio 1; 2 = Studio 2; 3 = Aussenstudio/ other Studio 
+        sofort = '0'
+        # Wurde im Sofort-Studio Freigabe erteilt? Did the Studio which issued the "immediate"-call also issue "give"?
+        sofortgive = False
+        # Welches Studio will sofort uebernehmen? Which studio wants to take over the Signal immediately?
+        sofortto = '0'
 
-    # Welches Studio hat "Sofort"-Button gedrueckt? Which studio hast pressed the "immediate"-button? 0 = keins/none; 1 = Studio 1; 2 = Studio 2; 3 = Aussenstudio/ other Studio 
-    sofort = '0'
-    # Wurde im Sofort-Studio Freigabe erteilt? Did the Studio which issued the "immediate"-call also issue "give"?
-    sofortgive = False
-    # Welches Studio will sofort uebernehmen? Which studio wants to take over the Signal immediately?
-    sofortto = '0'
     # LED-Check initlialisieren/ Initialize LED-Check
     ledchange = True
 
@@ -139,7 +155,6 @@ class Button:
                 logging.debug("ledchange: {}".format(ledchange))
                 logging.debug("issuing changestate-call to see if something has to change")
                 changestate(self.studio, self.function)
-                savestate()
                 logging.debug("**** post-button - new state ****")
                 logging.debug("on air: {}, release: {}, claim: {}, on air next: {}".format(onair, give, take, nexton))
                 logging.debug(
@@ -351,10 +366,51 @@ class LED:
                 self.off()
 
 
-# Timer definieren, der ggf. zur vollen Stunde umschaltet
-# Define timer that switches at the full hour if necessary
+# "Fernsteuerung" der Umschaltlogig ermoeglichen
+# Allo remote usage of switching-logic
+def virtualbuttoncheck():
+    # Wenn eine Datei mit Namens-Format [STUDIO]_[FUNKTION] vorliegt, changestate-Funktion aufrufen
+    # If there's a file with a name of format [STUDIO]_[FUNCTION], call changestate-function
+    if os.listdir('/home/umschalter/virtualbuttons'):
+        buttons = os.listdir('/home/umschalter/virtualbuttons')
+        for button in buttons:
+            logging.debug("Virtual Button: found file of name: {}".format(button))
+            # Um Programmabbruch bei fehlerhaftem Datei-Namen zu verhindern, "try"
+            # To avoid programm-end because of false file-name, "try"
+            try:
+                studio = button.split('_')[0]
+                function = button.split('_')[1]
+                # Nur fuer Studios, die auch wirklich existieren
+                # Only for Studios which really exist
+                if studio == '1' or studio == '2' or studio == '3':
+                    logging.info("Virtual Button: virtual button {}, studio {} pressed".format(function, studio))
+                    changestate(studio, function)
+                # Button-Datei entfernen
+                # Remove button-file
+                logging.debug("Virtual Button: removing file {}".format(button))
+                os.remove('/home/umschalter/virtualbuttons/{}'.format(button))
+            # Bei fehlerhaften Namen Datei trotzdem entfernen
+            # Remove files with false file-names
+            except IndexError:
+                logging.debug("Virtual Button: found file with wrong name: {}. removing it now".format(button))
+                os.remove('/home/umschalter/virtualbuttons/{}'.format(button))
+
+
+
+# Verschiedene Timer definieren
+# Define different timers
 def timecheck():
-    if time.strftime('%M%S') == '0000':
+    timenow = time.strftime('%M%S')
+    # Fuer puenktlichere Umschaltung die Sleep-Zeit verkuerzt in der letzten Sekunde vor der vollen Stunde
+    # For a better timing of the switch, have shorter sleep-time in last second before new hour
+    global sleeptime
+    if timenow == '5959':
+        sleeptime = 0.01
+    else:
+        sleeptime = 0.05
+    # Timer fuer die Umschaltung zur vollen Stunde
+    # Timer to switch at every new hour
+    if timenow == '0000':
         global now, then
         # gmtime, damit Zeitumstellung keine Rolle spielt
         # gmtime, so that daylight-saving-time won't do any harm
@@ -365,6 +421,15 @@ def timecheck():
             logging.info("Time-Check: the time to switch is now")
             umschalt()
             then = now
+    # Timer fuer den Software-Watchdog (muss jede Sekunde aufgerufen werden)
+    # Timer to notify Software-Watchdog (which has to be called every second)
+    global nowsecs, thensecs
+    nowsecs = time.strftime('%S')
+    if 'thensecs' not in globals():
+        thensecs = '99'
+    if nowsecs != thensecs:
+        watchdogcall()
+        thensecs = nowsecs
 
 
 # Status-Aenderungs-Logik
@@ -521,6 +586,7 @@ def changestate(studio, function):
                     sofortgive = False
                     soforttimerstop()
                 ledchange = True
+    savestate()
 
 
 # Umschalt-Logik definieren
@@ -562,6 +628,7 @@ def umschalt():
         sofort = '0'
         sofortgive = False
         sofortto = '0'
+    savestate()
     logging.debug("**** post-switch - new state ****")
     logging.debug("on air: {}, release: {}, claim: {}, on air next: {}".format(onair, give, take, nexton))
     logging.debug("immediate-state called by studio: {}, immediate-release: {}, immediate switch to: {}".format(sofort,
@@ -637,10 +704,22 @@ def umschaltsignal(switchto):
 # Aktuellen Zustand in Datei schreiben
 # Save state to file
 def savestate():
-    statesave = open("statesave.txt", "w")
-    timeend = time.strftime('%Y%m%d%H')
-    statesave.write("{};{};{};{};{};".format(timeend, str(onair), give, take, str(nexton)))
+    statesave = open("/home/umschalter/statesave.txt", "w")
+    timesave = time.strftime('%Y%m%d%H')
+    statesave.write("{};{};{};{};{};{};{};{}".format(timesave, str(onair), give, take, str(nexton), 
+                                                        str(sofort), sofortgive, str(sofortto)))
     statesave.close()
+
+
+# Watchdog-Signal definieren
+# Define Signal for software-watchdog
+def watchdogcall():
+    watchdogsock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    watchdogaddress = os.getenv('NOTIFY_SOCKET')
+    watchdogmessage = b"WATCHDOG=1"
+    watchdogsock.sendto(watchdogmessage, watchdogaddress)
+#    watchdogsock.connect(addr)
+#    watchdogsock.sendall("WATCHDOG=1")
 
 
 # Bei Programmende
@@ -690,7 +769,7 @@ def shinebright(timeshine):
     for L in [L1G, L1Y, L1R, L2G, L2Y, L2R, L3G, L3Y, L0G]:
         L.off()
 
-shinebright(1)
+shinebright(0.1)
 
 
 logging.debug("++++++ initial states ++++++")
@@ -705,9 +784,10 @@ while True:
     timecheck()
     for B in [B1F, B1U, B1S, B2F, B2U, B2S]:
         B.buttoncheck()
-        if ledchange == True:
-            logging.debug("LEDs: checking and setting led-states")
-            for L in [L1G, L1Y, L1R, L2G, L2Y, L2R, L3G, L3Y, L0G]:
-                L.ledcheck()
-            ledchange = False
-    time.sleep(0.05)
+    virtualbuttoncheck()
+    if ledchange == True:
+        logging.debug("LEDs: checking and setting led-states")
+        for L in [L1G, L1Y, L1R, L2G, L2Y, L2R, L3G, L3Y, L0G]:
+            L.ledcheck()
+        ledchange = False
+    time.sleep(sleeptime)
