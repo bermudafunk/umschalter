@@ -23,10 +23,6 @@ logging.basicConfig(filename='/var/log/umschalt.log',
 GPIO.setmode(GPIO.BOARD)
 
 
-addr = os.getenv('NOTIFY_SOCKET')
-logging.info("notify-socket: {}".format(addr))
-
-
 # Variablen setzen
 # Set variables
 
@@ -401,13 +397,13 @@ def virtualbuttoncheck():
 # Define different timers
 def timecheck():
     timenow = time.strftime('%M%S')
-    # Fuer puenktlichere Umschaltung die Sleep-Zeit verkuerzt in der letzten Sekunde vor der vollen Stunde
+    # Fuer puenktlichere Umschaltung die Sleep-Zeit verkuerzen in der letzten Sekunde vor der vollen Stunde
     # For a better timing of the switch, have shorter sleep-time in last second before new hour
     global sleeptime
     if timenow == '5959':
-        sleeptime = 0.01
+        sleeptime = 0.001
     else:
-        sleeptime = 0.05
+        sleeptime = 0.01
     # Timer fuer die Umschaltung zur vollen Stunde
     # Timer to switch at every new hour
     if timenow == '0000':
@@ -418,7 +414,7 @@ def timecheck():
         if 'then' not in globals():
             then = '999999'
         if now != then:
-            logging.info("Time-Check: the time to switch is now")
+            logging.debug("Time-Check: the time to switch is now")
             umschalt()
             then = now
     # Timer fuer den Software-Watchdog (muss jede Sekunde aufgerufen werden)
@@ -597,7 +593,7 @@ def umschalt():
     # die globalen Variablen muessen in die Funktion geholt werden
     # global variables have to be declared as such
     global onair, give, take, nexton, sofort, sofortgive, sofortto, ledchange
-    logging.info("++++++ switching now (if neccesary) ++++++")
+    logging.debug("++++++ switching now (if neccesary) ++++++")
     logging.debug("**** pre-switch - old state ****")
     logging.debug("on air: {}, release: {}, claim: {}, on air next: {}".format(onair, give, take, nexton))
     logging.debug("immediate-state called by studio: {}, immediate-release: {}, immediate switch to: {}".format(sofort,
@@ -718,8 +714,6 @@ def watchdogcall():
     watchdogaddress = os.getenv('NOTIFY_SOCKET')
     watchdogmessage = b"WATCHDOG=1"
     watchdogsock.sendto(watchdogmessage, watchdogaddress)
-#    watchdogsock.connect(addr)
-#    watchdogsock.sendall("WATCHDOG=1")
 
 
 # Bei Programmende
